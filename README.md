@@ -58,6 +58,7 @@ $ poetry install
 
 # Launch virtual environment
 $ poetry shell
+$ poetry env activate   
 
 # Run the app
 $ python ./src/relay.py
