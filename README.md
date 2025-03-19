@@ -57,8 +57,14 @@ $ pipx install poetry
 $ poetry install
 
 # Launch virtual environment
-$ poetry shell
-$ poetry env activate   
+$ poetry shell # legacy
+$ poetry env activate  
+
+# Check if env is running
+poetry env info
+
+# add a package, example python-dotenv 
+poetry add python-dotenv
 
 # Run the app
 $ python ./src/relay.py

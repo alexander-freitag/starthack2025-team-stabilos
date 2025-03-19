@@ -1,6 +1,7 @@
 import uuid
 import json
 import os
+from dotenv import load_dotenv
 
 from flask import Flask, request, jsonify
 import azure.cognitiveservices.speech as speechsdk
@@ -13,7 +14,9 @@ import io
 
 AZURE_SPEECH_KEY = "See https://starthack.eu/#/case-details?id=21, Case Description"
 AZURE_SPEECH_REGION = "switzerlandnorth"
-OPENAI_KEY = "See https://starthack.eu/#/case-details?id=21, Case Description"
+OPENAI_KEY = os.getenv("OPENAI_API_KEY")
+
+load_dotenv() # load environment variables from .env file
 client = OpenAI(api_key=OPENAI_KEY)
 
 app = Flask(__name__)
