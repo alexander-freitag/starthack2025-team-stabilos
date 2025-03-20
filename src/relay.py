@@ -1,11 +1,11 @@
-import queue
-import time
-import uuid
 import json
 import os
+import time
+import uuid
+
 from dotenv import load_dotenv
 
-#from audio_cleaning import clean_audio, isolate_speaker
+from user_identification import identify_speaker, enroll_speaker
 
 load_dotenv() # load environment variables from .env file
 
@@ -16,7 +16,6 @@ from flask_cors import CORS
 from flasgger import Swagger
 
 from openai import OpenAI
-import io
 
 AZURE_SPEECH_KEY = os.getenv("AZURE_SPEECH_KEY_2")
 AZURE_SPEECH_REGION = "switzerlandnorth"
@@ -30,31 +29,8 @@ cors = CORS(app)
 swagger = Swagger(app)
 
 sessions = {}
-chat_sessions: dict[str, uuid] = {}
-
-# def transcribe_whisper(audio_recording):
-#     audio_file = io.BytesIO(audio_recording)
-#     audio_file.name = 'audio.wav'  # Whisper requires a filename with a valid extension
-#     transcription = client.audio.transcriptions.create(
-#         model="whisper-1",
-#         file=audio_file,
-#         #language = ""  # specify Language explicitly
-#     )
-#     print(f"openai transcription: {transcription.text}")
-#     return transcription.text
-    
-# def transcribe_preview(session):
-#     if session["audio_buffer"] is not None:
-#         text = transcribe_whisper(session["audio_buffer"])
-#         # send transcription
-#         ws = session.get("websocket")
-#         if ws:
-#             message = {
-#                 "event": "recognizing",
-#                 "text": text,
-#                 "language": session["language"]
-#             }
-#             ws.send(json.dumps(message))
+chat_sessions = {} # (chat session, user_id)
+eagle_profiles = {} # (user_id, eagle_profile)
 
 @app.route("/chats/<chat_session_id>/sessions", methods=["POST"])
 def open_session(chat_session_id):
@@ -100,6 +76,12 @@ def open_session(chat_session_id):
     """
     session_id = str(uuid.uuid4())
 
+    user_unknown = False
+    if chat_session_id not in chat_sessions:
+        chat_sessions[chat_session_id] = -1
+    if chat_sessions[chat_session_id] == -1:
+        user_unknown = True
+
     body = request.get_json()
     if "language" not in body:
         return jsonify({"error": "Language not specified"}), 400
@@ -119,7 +101,8 @@ def open_session(chat_session_id):
         "websocket": None,  # will be set when the client connects via WS
         "recognizer": recognizer,
         "audio_input": audio_input,
-        "transcript": ""
+        "transcript": "",
+        "unknown": user_unknown
     }
 
     def recognized_callback(evt):
@@ -188,14 +171,19 @@ def upload_audio_chunk(chat_session_id, session_id):
     else:
         sessions[session_id]["audio_buffer"] = audio_data
 
-    # clean audio
-    #audio_data = clean_audio(audio_data)
-    # isolate speaker
-    #audio_data = isolate_speaker(audio_data)
+
+    if sessions[session_id]["unknown"]:
+        user_id = None
+        if len(eagle_profiles) > 0:
+            full_audio_data = sessions[session_id]["audio_buffer"]
+            user_id = identify_speaker(full_audio_data, eagle_profiles)
+        if user_id:
+            sessions[session_id]["unknown"] = False
+            chat_sessions[chat_session_id] = user_id
+
+
     #send audio chunk to azure
     sessions[session_id]["audio_input"].write(audio_data)
-
-    # TODO optionally transcribe real time audio chunks, see transcribe_preview()
 
     return jsonify({"status": "audio_chunk_received"})
 
@@ -240,20 +228,6 @@ def close_session(chat_session_id, session_id):
     if session_id not in sessions:
         return jsonify({"error": "Session not found"}), 404
 
-    # if sessions[session_id]["audio_buffer"] is not None:
-    #     # TODO preprocess audio/text, extract and save speaker identification
-    #
-    #     text = transcribe_whisper(sessions[session_id]["audio_buffer"])
-    #     # send transcription
-    #     ws = sessions[session_id].get("websocket")
-    #     if ws:
-    #       message = {
-    #           "event": "recognized",
-    #           "text": text,
-    #           "language": sessions[session_id]["language"]
-    #       }
-    #       ws.send(json.dumps(message))
-    start_time = time.time()
     sessions[session_id]["audio_input"].close()  # end azure audiostream
     sessions[session_id]["recognizer"].stop_continuous_recognition()  # end recognition
 
@@ -268,10 +242,18 @@ def close_session(chat_session_id, session_id):
           "language": sessions[session_id]["language"]
       }
       ws.send(json.dumps(message))
-    end_time = time.time()
-    time_elapsed = end_time - start_time
-    print(f"{time_elapsed} seconds")
-    # # Remove from session store
+
+    if sessions[session_id]["audio_buffer"] is not None:
+        audio_data = sessions[session_id]["audio_buffer"]
+
+        if sessions[session_id]["unknown"]:
+            user_id, profile = enroll_speaker(chat_session_id, audio_data)
+            if profile:
+                print(user_id, profile)
+                eagle_profiles[user_id] = profile
+                chat_sessions[chat_session_id] = user_id
+
+    time.sleep(5)
     sessions.pop(session_id, None)
 
     return jsonify({"status": "session_closed"})
