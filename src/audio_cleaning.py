@@ -1,18 +1,28 @@
-import torchaudio
-from deepfilternet import DeepFilterNet
+import torch
+import noisereduce as nr
 
-# Lade das Noise-Filter-Modell
-denoiser = DeepFilterNet.from_pretrained("facebook/deepfilternet-v2")
+# Lade das Silero VAD-Modell
+vad_model, utils = torch.hub.load(repo_or_dir='snakers4/silero-vad', model='silero_vad', force_reload=True)
 
+# Extrahiere nur die benötigten Funktionen aus utils
+(get_speech_timestamps, _, _, _, collect_chunks) = utils
 
-def clean_audio(audio_path):
-    waveform, sr = torchaudio.load(audio_path)
-    waveform = torchaudio.transforms.Resample(orig_freq=sr, new_freq=16000)(waveform)
+def isolate_speaker(audio_chunk, sample_rate=16000):
+    """ Extrahiert nur den Hauptsprecher aus einem Audio-Chunk """
+    waveform = torch.tensor(audio_chunk, dtype=torch.float32).unsqueeze(0)
 
-    # Wende Noise Suppression an
-    filtered_audio = denoiser(waveform)
+    speech_timestamps = get_speech_timestamps(waveform, vad_model, sampling_rate=sample_rate)
+    if not speech_timestamps:
+        print("keine sprecher erkannt")
+        return audio_chunk
 
-    # Speichere das gefilterte Audio
-    output_path = "cleaned_audio.wav"
-    torchaudio.save(output_path, filtered_audio, 16000)
-    return output_path
+    cleaned_audio = collect_chunks(speech_timestamps, waveform)
+    return cleaned_audio.squeeze(0).numpy()
+
+def clean_audio_chunk(audio_chunk):
+    """
+    Entfernt Hintergrundgeräusche aus einem Audio-Chunk mit RNNoise.
+    :param audio_chunk: NumPy-Array mit PCM-Audiodaten (float32)
+    :return: Bereinigtes NumPy-Array
+    """
+    return nr.reduce_noise(y=audio_chunk, sr=16000)

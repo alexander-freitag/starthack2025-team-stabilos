@@ -1,7 +1,11 @@
+import queue
+import time
 import uuid
 import json
 import os
 from dotenv import load_dotenv
+
+#from audio_cleaning import clean_audio, isolate_speaker
 
 load_dotenv() # load environment variables from .env file
 
@@ -14,7 +18,7 @@ from flasgger import Swagger
 from openai import OpenAI
 import io
 
-AZURE_SPEECH_KEY = "See https://starthack.eu/#/case-details?id=21, Case Description"
+AZURE_SPEECH_KEY = os.getenv("AZURE_SPEECH_KEY_2")
 AZURE_SPEECH_REGION = "switzerlandnorth"
 OPENAI_KEY = os.getenv("OPENAI_API_KEY")
 
@@ -26,30 +30,31 @@ cors = CORS(app)
 swagger = Swagger(app)
 
 sessions = {}
+chat_sessions: dict[str, uuid] = {}
 
-def transcribe_whisper(audio_recording):
-    audio_file = io.BytesIO(audio_recording)
-    audio_file.name = 'audio.wav'  # Whisper requires a filename with a valid extension
-    transcription = client.audio.transcriptions.create(
-        model="whisper-1",
-        file=audio_file,
-        #language = ""  # specify Language explicitly
-    )
-    print(f"openai transcription: {transcription.text}")
-    return transcription.text
+# def transcribe_whisper(audio_recording):
+#     audio_file = io.BytesIO(audio_recording)
+#     audio_file.name = 'audio.wav'  # Whisper requires a filename with a valid extension
+#     transcription = client.audio.transcriptions.create(
+#         model="whisper-1",
+#         file=audio_file,
+#         #language = ""  # specify Language explicitly
+#     )
+#     print(f"openai transcription: {transcription.text}")
+#     return transcription.text
     
-def transcribe_preview(session):
-    if session["audio_buffer"] is not None:
-        text = transcribe_whisper(session["audio_buffer"])
-        # send transcription
-        ws = session.get("websocket")
-        if ws:
-            message = {
-                "event": "recognizing",
-                "text": text,
-                "language": session["language"]
-            }
-            ws.send(json.dumps(message))
+# def transcribe_preview(session):
+#     if session["audio_buffer"] is not None:
+#         text = transcribe_whisper(session["audio_buffer"])
+#         # send transcription
+#         ws = session.get("websocket")
+#         if ws:
+#             message = {
+#                 "event": "recognizing",
+#                 "text": text,
+#                 "language": session["language"]
+#             }
+#             ws.send(json.dumps(message))
 
 @app.route("/chats/<chat_session_id>/sessions", methods=["POST"])
 def open_session(chat_session_id):
@@ -100,12 +105,31 @@ def open_session(chat_session_id):
         return jsonify({"error": "Language not specified"}), 400
     language = body["language"]
 
-    sessions[session_id] = {
+    speech_config = speechsdk.SpeechConfig(subscription=AZURE_SPEECH_KEY, region=AZURE_SPEECH_REGION)
+    speech_config.speech_recognition_language = language
+    audio_format = speechsdk.audio.AudioStreamFormat(samples_per_second=16000, bits_per_sample=16, channels=1)
+    audio_input = speechsdk.audio.PushAudioInputStream(stream_format=audio_format)
+    audio_config = speechsdk.audio.AudioConfig(stream=audio_input)
+    recognizer = speechsdk.SpeechRecognizer(speech_config=speech_config, audio_config=audio_config)
+
+    session_data = {
         "audio_buffer": None,
         "chatSessionId": chat_session_id,
         "language": language,
-        "websocket": None  # will be set when the client connects via WS
+        "websocket": None,  # will be set when the client connects via WS
+        "recognizer": recognizer,
+        "audio_input": audio_input,
+        "transcript": ""
     }
+
+    def recognized_callback(evt):
+        if evt.result.reason == speechsdk.ResultReason.RecognizedSpeech:
+            session_data["transcript"] += evt.result.text + " "
+
+    recognizer.recognized.connect(recognized_callback)
+    recognizer.start_continuous_recognition()
+
+    sessions[session_id] = session_data
 
     return jsonify({"session_id": session_id})
 
@@ -164,6 +188,13 @@ def upload_audio_chunk(chat_session_id, session_id):
     else:
         sessions[session_id]["audio_buffer"] = audio_data
 
+    # clean audio
+    #audio_data = clean_audio(audio_data)
+    # isolate speaker
+    #audio_data = isolate_speaker(audio_data)
+    #send audio chunk to azure
+    sessions[session_id]["audio_input"].write(audio_data)
+
     # TODO optionally transcribe real time audio chunks, see transcribe_preview()
 
     return jsonify({"status": "audio_chunk_received"})
@@ -209,20 +240,37 @@ def close_session(chat_session_id, session_id):
     if session_id not in sessions:
         return jsonify({"error": "Session not found"}), 404
 
-    if sessions[session_id]["audio_buffer"] is not None:
-        # TODO preprocess audio/text, extract and save speaker identification
+    # if sessions[session_id]["audio_buffer"] is not None:
+    #     # TODO preprocess audio/text, extract and save speaker identification
+    #
+    #     text = transcribe_whisper(sessions[session_id]["audio_buffer"])
+    #     # send transcription
+    #     ws = sessions[session_id].get("websocket")
+    #     if ws:
+    #       message = {
+    #           "event": "recognized",
+    #           "text": text,
+    #           "language": sessions[session_id]["language"]
+    #       }
+    #       ws.send(json.dumps(message))
+    start_time = time.time()
+    sessions[session_id]["audio_input"].close()  # end azure audiostream
+    sessions[session_id]["recognizer"].stop_continuous_recognition()  # end recognition
 
-        text = transcribe_whisper(sessions[session_id]["audio_buffer"])
-        # send transcription
-        ws = sessions[session_id].get("websocket")
-        if ws:
-          message = {
-              "event": "recognized",
-              "text": text,
-              "language": sessions[session_id]["language"]
-          }
-          ws.send(json.dumps(message))
-    
+    final_text = sessions[session_id].get("transcript", "")
+    print(f"azure transcription: {final_text}")
+
+    ws = sessions[session_id].get("websocket")
+    if ws:
+      message = {
+          "event": "recognized",
+          "text": final_text,
+          "language": sessions[session_id]["language"]
+      }
+      ws.send(json.dumps(message))
+    end_time = time.time()
+    time_elapsed = end_time - start_time
+    print(f"{time_elapsed} seconds")
     # # Remove from session store
     sessions.pop(session_id, None)
 
@@ -315,6 +363,10 @@ def set_memories(chat_session_id):
         description: Invalid request data.
     """
     chat_history = request.get_json()
+    for memory in chat_history:
+        print(f"chat history {memory['text']}")
+    #user id von chat session ermitteln
+    #unter user id abspeichern
     
     # TODO preprocess data (chat history & system message)
     
@@ -352,6 +404,8 @@ def get_memories(chat_session_id):
     """
     print(f"{chat_session_id}: replacing memories...")
 
+    # nutzer ermitteln von chat session
+    # memories zurückgeben
     # TODO load relevant memories from your database. Example return value:
     return jsonify({"memories": "The guest typically orders menu 1 and a glass of sparkling water."})
 
