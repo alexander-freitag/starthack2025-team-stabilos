@@ -1,3 +1,4 @@
+import time
 import uuid
 import json
 import os
@@ -211,7 +212,7 @@ def close_session(chat_session_id, session_id):
 
     if sessions[session_id]["audio_buffer"] is not None:
         # TODO preprocess audio/text, extract and save speaker identification
-
+        start_time = time.time()
         text = transcribe_whisper(sessions[session_id]["audio_buffer"])
         # send transcription
         ws = sessions[session_id].get("websocket")
@@ -222,6 +223,9 @@ def close_session(chat_session_id, session_id):
               "language": sessions[session_id]["language"]
           }
           ws.send(json.dumps(message))
+        end_time = time.time()
+        elapsed_time = end_time - start_time
+        print(f"{elapsed_time:.6f} seconds")
     
     # # Remove from session store
     sessions.pop(session_id, None)
