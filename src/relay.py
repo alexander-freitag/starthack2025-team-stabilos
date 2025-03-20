@@ -38,18 +38,18 @@ def transcribe_whisper(audio_recording):
     print(f"openai transcription: {transcription.text}")
     return transcription.text
     
-# def transcribe_preview(session):
-#     if session["audio_buffer"] is not None:
-#         text = transcribe_whisper(session["audio_buffer"])
-#         # send transcription
-#         ws = session.get("websocket")
-#         if ws:
-#             message = {
-#                 "event": "recognizing",
-#                 "text": text,
-#                 "language": session["language"]
-#             }
-#             ws.send(json.dumps(message))
+def transcribe_preview(session):
+    if session["audio_buffer"] is not None:
+        text = transcribe_whisper(session["audio_buffer"])
+        # send transcription
+        ws = session.get("websocket")
+        if ws:
+            message = {
+                "event": "recognizing",
+                "text": text,
+                "language": session["language"]
+            }
+            ws.send(json.dumps(message))
 
 @app.route("/chats/<chat_session_id>/sessions", methods=["POST"])
 def open_session(chat_session_id):
