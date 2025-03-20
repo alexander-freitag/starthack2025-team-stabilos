@@ -1,8 +1,14 @@
 import sqlite3
+import os
 from typing import List, Dict, Any
 
 def get_connection(db_path: str) -> sqlite3.Connection:
     """Initialize the database with necessary tables if they don't exist."""
+    
+    # Create the directory if it doesn't exist
+    db_dir = os.path.dirname(db_path)
+    if db_dir and not os.path.exists(db_dir):
+        os.makedirs(db_dir)
     
     conn = sqlite3.connect(db_path)
     c = conn.cursor()
@@ -54,8 +60,8 @@ def get_memories_by_userid(conn: sqlite3.Connection, user_id: str) -> str:
         
         # Get the single memory for this user
         row = c.fetchone()
-        return row[0] if row else ""
+        return row[0] if row else "No memories yet!"
 
     except sqlite3.Error as e:
         print(f"Database error: {e}")
-        return "No memories yet!"
+        return "Could not retrieve memories"
