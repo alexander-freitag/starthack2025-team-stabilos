@@ -2,9 +2,10 @@ import io
 import os
 import uuid
 import wave
-from scipy.signal import resample
+
 import numpy as np
 import pveagle
+from scipy.signal import resample
 
 EAGLE_KEY = os.getenv("EAGLE_KEY")
 
@@ -77,7 +78,7 @@ def enroll_speaker(chat_session_id, audio_chunk: bytes):
         speaker_profile = eagle_profiler.export()
         print(f"✅ Enrollment abgeschlossen für {speaker_profile}!")
         enrollment_progress[chat_session_id] = (speaker_profile, enroll_percentage)
-        return uuid.uuid4(), speaker_profile
+        return str(uuid.uuid4()), speaker_profile
 
     return None, None
 

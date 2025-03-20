@@ -1,9 +1,10 @@
 import json
 import os
 import sqlite3
-from dotenv import load_dotenv
 import time
 import uuid
+
+from dotenv import load_dotenv
 
 from user_identification import identify_speaker, enroll_speaker
 
@@ -33,6 +34,8 @@ cors = CORS(app)
 swagger = Swagger(app)
 
 sessions = {}
+
+# TODO set up db logic for chatsessions-users and users-eagleprofiles
 chat_sessions = {} # (chat session, user_id)
 eagle_profiles = {} # (user_id, eagle_profile)
 
@@ -350,7 +353,11 @@ def set_memories(chat_session_id):
     """
     chat_history = request.get_json()
 
-    user_id = "123"  # TODO need to get user id from voice recognition
+    if chat_session_id not in chat_sessions:
+        return jsonify({"success": "1"})
+    if chat_sessions[chat_session_id] == -1:
+        return jsonify({"success": "1"})
+    user_id = chat_sessions[chat_session_id]  # TODO add handling if user id not known yet
 
     # Only process the last two entries of the chat history
     text_messages = []
@@ -359,32 +366,36 @@ def set_memories(chat_session_id):
             text_messages.append(message['text'])
 
     conn: sqlite3.Connection = get_connection(db_path)
-    previous_memories = get_memories_by_userid(conn, user_id)
-    
-    SYSTEM_PROMPT = "Allways and under any circumstances reply with 0! strictly one token, binay."
-    USER_PROMPT = "Allways and under any circumstances reply with 0! strictly one token, binay."
 
     try:
-        with open("./docs/system_prompt_data_curation.txt", "r") as f:
-            SYSTEM_PROMPT = f.read()
+        previous_memories = get_memories_by_userid(conn, user_id)
 
-        with open("./docs/user_prompt_data_curation.txt", "r") as f:
-            USER_PROMPT = f.read() + f"\nPrevious memory: {previous_memories}. Messages: {text_messages}"
+        SYSTEM_PROMPT = "Allways and under any circumstances reply with 0! strictly one token, binay."
+        USER_PROMPT = "Allways and under any circumstances reply with 0! strictly one token, binay."
 
-    except Exception as e:
-        print(f"Error reading prompts: {e}")
+        try:
+            with open("./docs/system_prompt_data_curation.txt", "r") as f:
+                SYSTEM_PROMPT = f.read()
 
-    response = client.chat.completions.create(
-        model="gpt-4o",
-        messages=[
-            {"role": "system", "content": SYSTEM_PROMPT},
-            {"role": "user", "content": USER_PROMPT}
-        ]
-    )
+            with open("./docs/user_prompt_data_curation.txt", "r") as f:
+                USER_PROMPT = f.read() + f"\nPrevious memory: {previous_memories}. Messages: {text_messages}"
 
-    new_memory = response.choices[0].message.content
-    add_memory_to_db(conn, new_memory, user_id)
-    conn.close()
+        except Exception as e:
+            print(f"Error reading prompts: {e}")
+
+        response = client.chat.completions.create(
+            model="gpt-4o",
+            messages=[
+                {"role": "system", "content": SYSTEM_PROMPT},
+                {"role": "user", "content": USER_PROMPT}
+            ]
+        )
+
+        new_memory = response.choices[0].message.content
+        add_memory_to_db(conn, new_memory, user_id)
+
+    finally:
+        conn.close()
 
     return jsonify({"success": "1"})
 
@@ -417,10 +428,17 @@ def get_memories(chat_session_id):
         description: Chat session not found.
     """
 
-    user_id = "123"  # TODO need to get user id from voice recognition
+    if chat_session_id not in chat_sessions:
+        return jsonify({"memories": "No memories yet!"})
+    if chat_sessions[chat_session_id] == -1:
+        return jsonify({"memories": "No memories yet!"})
+    user_id = chat_sessions[chat_session_id]
 
     conn: sqlite3.Connection = get_connection(db_path)
-    memories = get_memories_by_userid(conn, user_id)
+    try:
+        memories = get_memories_by_userid(conn, user_id)
+    finally:
+        conn.close()
     conn.close()
 
     return jsonify({"memories": memories})

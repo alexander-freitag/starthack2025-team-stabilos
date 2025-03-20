@@ -1,6 +1,6 @@
-import sqlite3
 import os
-from typing import List, Dict, Any
+import sqlite3
+
 
 def get_connection(db_path: str) -> sqlite3.Connection:
     """Initialize the database with necessary tables if they don't exist."""
@@ -15,7 +15,7 @@ def get_connection(db_path: str) -> sqlite3.Connection:
         
     c.execute('''
         CREATE TABLE IF NOT EXISTS memories (
-            user_id INTEGER PRIMARY KEY,
+            user_id TEXT PRIMARY KEY,
             content TEXT NOT NULL,
             timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
