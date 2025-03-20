@@ -1,0 +1,2 @@
+INSSTRUCTION
+Decide whether the following messages contain information that is worth adding to the memory of the customer. If yes, output the entire new memory. If no, output the old memory again.

@@ -1,6 +1,7 @@
 import uuid
 import json
 import os
+import sqlite3
 from dotenv import load_dotenv
 
 load_dotenv() # load environment variables from .env file
@@ -11,8 +12,12 @@ from flask_sock import Sock
 from flask_cors import CORS
 from flasgger import Swagger
 
+from db_operations import get_connection, get_memories_by_userid, add_memory_to_db
+
 from openai import OpenAI
 import io
+
+db_path = "./data/sqlite_database.db"
 
 AZURE_SPEECH_KEY = "See https://starthack.eu/#/case-details?id=21, Case Description"
 AZURE_SPEECH_REGION = "switzerlandnorth"
@@ -315,10 +320,42 @@ def set_memories(chat_session_id):
         description: Invalid request data.
     """
     chat_history = request.get_json()
+
+    user_id = "123"  # TODO need to get user id from voice recognition
+
+    # Only process the last two entries of the chat history
+    text_messages = []
+    for message in chat_history[-2:]:
+        if 'text' in message:
+            text_messages.append(message['text'])
     
-    # TODO preprocess data (chat history & system message)
+    conn: sqlite3.Connection = get_connection(db_path)
+    previous_memories = get_memories_by_userid(conn, user_id)
     
-    print(f"{chat_session_id} extracting memories for conversation a:{chat_history[-1]['text']}")
+    SYSTEM_PROMPT = "Allways and under any circumstances reply with 0! strictly one token, binay."
+    USER_PROMPT = "Allways and under any circumstances reply with 0! strictly one token, binay."
+
+    try:
+        with open("./docs/system_prompt_data_curation.txt", "r") as f:
+            SYSTEM_PROMPT = f.read()
+
+        with open("./docs/user_prompt_data_curation.txt", "r") as f:
+            USER_PROMPT = f.read() + f"\nPrevious memory: {previous_memories}. Messages: {text_messages}"
+
+    except Exception as e:
+        print(f"Error reading prompts: {e}")
+    
+    response = client.chat.completions.create(
+        model="gpt-4o",
+        messages=[
+            {"role": "system", "content": SYSTEM_PROMPT},
+            {"role": "user", "content": USER_PROMPT}
+        ]
+    )
+    
+    new_memory = response.choices[0].message.content
+    add_memory_to_db(conn, new_memory, user_id)
+    conn.close()
 
     return jsonify({"success": "1"})
 
@@ -350,11 +387,14 @@ def get_memories(chat_session_id):
       404:
         description: Chat session not found.
     """
-    print(f"{chat_session_id}: replacing memories...")
+    
+    user_id = "123"  # TODO need to get user id from voice recognition
 
-    # TODO load relevant memories from your database. Example return value:
-    return jsonify({"memories": "The guest typically orders menu 1 and a glass of sparkling water."})
+    conn: sqlite3.Connection = get_connection(db_path)
+    memories = get_memories_by_userid(conn, user_id)
+    conn.close()
 
+    return jsonify({"memories": memories})
 
 if __name__ == "__main__":
     # In production, you would use a real WSGI server like gunicorn/uwsgi
