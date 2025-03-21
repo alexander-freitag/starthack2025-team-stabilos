@@ -1,6 +1,7 @@
 import json
 import os
 import sqlite3
+import threading
 import time
 import uuid
 
@@ -16,7 +17,7 @@ from flask_sock import Sock
 from flask_cors import CORS
 from flasgger import Swagger
 
-from db_operations import get_connection, get_memories_by_userid, add_memory_to_db
+from db_operations import get_connection, get_memories_by_userid, add_memory_to_db, fetch_all_profiles, insert_eagle_profile
 
 from openai import OpenAI
 
@@ -35,9 +36,14 @@ swagger = Swagger(app)
 
 sessions = {}
 
-# TODO set up db logic for chatsessions-users and users-eagleprofiles
 chat_sessions = {} # (chat session, user_id)
-eagle_profiles = {} # (user_id, eagle_profile)
+eagle_profiles = {}
+conn: sqlite3.Connection = get_connection(db_path)
+try:
+    eagle_profiles = fetch_all_profiles(conn) # (user_id, eagle_profile)
+finally:
+    conn.close()
+
 
 @app.route("/chats/<chat_session_id>/sessions", methods=["POST"])
 def open_session(chat_session_id):
@@ -258,10 +264,22 @@ def close_session(chat_session_id, session_id):
             if profile:
                 print(user_id, profile)
                 eagle_profiles[user_id] = profile
+
+                conn: sqlite3.Connection = get_connection(db_path)
+                try:
+                    insert_eagle_profile(conn, user_id, profile)
+                finally:
+                    conn.close()
+
                 chat_sessions[chat_session_id] = user_id
 
-    time.sleep(5)
-    sessions.pop(session_id, None)
+    def delayed_session_cleanup(session_id):
+        time.sleep(5)  # 5 Sekunden warten
+        sessions.pop(session_id, None)  # Session entfernen
+        print(f"Session {session_id} wurde gelöscht.")
+
+    # Starte den Timer-Thread, aber blockiere den Hauptthread nicht
+    threading.Thread(target=delayed_session_cleanup, args=(session_id,), daemon=True).start()
 
     return jsonify({"status": "session_closed"})
 
@@ -357,21 +375,26 @@ def set_memories(chat_session_id):
         return jsonify({"success": "1"})
     if chat_sessions[chat_session_id] == -1:
         return jsonify({"success": "1"})
-    user_id = chat_sessions[chat_session_id]  # TODO add handling if user id not known yet
-
-    # Only process the last two entries of the chat history
-    text_messages = []
-    for message in chat_history[-2:]:
-        if 'text' in message:
-            text_messages.append(message['text'])
+    user_id = chat_sessions[chat_session_id]
 
     conn: sqlite3.Connection = get_connection(db_path)
 
     try:
         previous_memories = get_memories_by_userid(conn, user_id)
 
-        SYSTEM_PROMPT = "Allways and under any circumstances reply with 0! strictly one token, binay."
-        USER_PROMPT = "Allways and under any circumstances reply with 0! strictly one token, binay."
+        text_messages = []
+
+        if previous_memories:
+            for message in chat_history[-2:]:
+                if 'text' in message:
+                    text_messages.append(message['text'])
+        else:
+            for message in chat_history:
+                if 'text' in message:
+                    text_messages.append(message['text'])
+
+        SYSTEM_PROMPT = "Allways and under any circumstances reply with 0! strictly one token, binary."
+        USER_PROMPT = "Allways and under any circumstances reply with 0! strictly one token, binary."
 
         try:
             with open("./docs/system_prompt_data_curation.txt", "r") as f:
@@ -439,7 +462,6 @@ def get_memories(chat_session_id):
         memories = get_memories_by_userid(conn, user_id)
     finally:
         conn.close()
-    conn.close()
 
     return jsonify({"memories": memories})
 
