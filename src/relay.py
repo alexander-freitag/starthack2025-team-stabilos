@@ -272,7 +272,6 @@ def close_session(chat_session_id, session_id):
                     conn.close()
 
                 chat_sessions[chat_session_id] = user_id
-
     def delayed_session_cleanup(session_id):
         time.sleep(5)  # 5 Sekunden warten
         sessions.pop(session_id, None)  # Session entfernen
@@ -462,7 +461,8 @@ def get_memories(chat_session_id):
         memories = get_memories_by_userid(conn, user_id)
     finally:
         conn.close()
-
+    if not memories:
+        return jsonify({"memories": "No memories yet!"})
     return jsonify({"memories": memories})
 
 if __name__ == "__main__":
